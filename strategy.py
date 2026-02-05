@@ -1,21 +1,29 @@
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score
 from sklearn.feature_selection import SelectFromModel
+from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 import numpy as np
 import pickle
 
 class QuantModel:
-    def __init__(self, n_estimators=100, max_depth=None):
+    def __init__(self, n_estimators=200, max_depth=6):
         self.base_model = RandomForestClassifier(
-            n_estimators=n_estimators, 
+            n_estimators=n_estimators,
             max_depth=max_depth,
             random_state=42,
-            n_jobs=-1
+            n_jobs=-1,
+            class_weight="balanced_subsample"
         )
-        self.model = self.base_model # Final model to use
+        self.model = self.base_model
         self.selector = None # Feature selector
+        self.label_order = [-1, 0, 1, 2]
+        self.label_keys = {
+            -1: "sharp_down",
+            0: "normal",
+            1: "sharp_up",
+            2: "limit_up"
+        }
         
         # Initial extensive feature list (match with features.py)
         self.feature_cols = [
@@ -67,16 +75,15 @@ class QuantModel:
                 data[col] = 0
                 
         X = data[self.feature_cols]
-        y = (data['target_return'] > 0.0).astype(int)
+        y_raw = data['target_class']
+        y = y_raw.map({label: idx for idx, label in enumerate(self.label_order)})
         
         if len(y.unique()) < 2:
             print("警告: 目标变量只有一个类别，模型无法有效学习。")
             return {'accuracy': 0, 'precision': 0, 'feature_importance': {}}
 
-        # 2. 特征筛选 (Feature Selection)
-        # 使用随机森林进行初步筛选，保留重要性大于平均值的特征
-        # max_features=20 限制最多选20个，防止过拟合
-        self.selector = SelectFromModel(estimator=self.base_model, max_features=20, threshold="mean")
+        unique_classes = sorted(y.unique().tolist())
+        self.selector = SelectFromModel(estimator=self.base_model, max_features=25, threshold="median")
         self.selector.fit(X, y)
         
         # 获取筛选后的特征名
@@ -92,7 +99,7 @@ class QuantModel:
         # 4. 评估
         preds = self.model.predict(X_test)
         acc = accuracy_score(y_test, preds)
-        prec = precision_score(y_test, preds, zero_division=0)
+        prec = precision_score(y_test, preds, average="macro", zero_division=0)
         
         return {
             'accuracy': acc,
@@ -101,25 +108,42 @@ class QuantModel:
             'selected_features_count': len(self.selected_features)
         }
 
-    def predict(self, data):
-        """
-        对新数据进行预测评分。
-        """
-        # 确保列存在
+    def predict_proba(self, data):
         for col in self.selected_features:
             if col not in data.columns:
                 data[col] = 0
-                
         X = data[self.selected_features]
-        probs = self.model.predict_proba(X)[:, 1]
-        return probs
+        probs = self.model.predict_proba(X)
+        classes = list(self.model.classes_)
+        result = pd.DataFrame(index=data.index)
+        for label in self.label_order:
+            key = self.label_keys[label]
+            label_index = self.label_order.index(label)
+            if label_index in classes:
+                col_idx = classes.index(label_index)
+                result[key] = probs[:, col_idx]
+            else:
+                result[key] = 0.0
+        return result
+
+    def predict_label(self, data):
+        probs = self.predict_proba(data)
+        top_key = probs.idxmax(axis=1)
+        return top_key, probs
 
     def save(self, filepath="model.pkl"):
         with open(filepath, "wb") as f:
-            pickle.dump({'model': self.model, 'features': self.selected_features}, f)
+            pickle.dump({
+                'model': self.model,
+                'features': self.selected_features,
+                'label_order': self.label_order,
+                'label_keys': self.label_keys
+            }, f)
 
     def load(self, filepath="model.pkl"):
         with open(filepath, "rb") as f:
             data = pickle.load(f)
             self.model = data['model']
             self.selected_features = data['features']
+            self.label_order = data.get('label_order', self.label_order)
+            self.label_keys = data.get('label_keys', self.label_keys)

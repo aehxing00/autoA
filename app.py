@@ -17,29 +17,41 @@ st.markdown("""
 # --- 侧边栏: 高级配置 ---
 st.sidebar.header("1. 基础设置")
 initial_capital = st.sidebar.number_input("初始资金", value=100000, step=10000)
-data_source_mode = st.sidebar.radio("数据源模式", ["实盘数据 (AkShare)", "模拟数据 (Demo)"], index=0)
+data_source_mode = st.sidebar.radio("数据源模式", ["实盘数据（AkShare）", "模拟数据（演示）"], index=0)
 
 # 训练/回测 时间分割
 st.sidebar.header("2. 时间与数据分割")
 split_date = st.sidebar.date_input("训练/测试分割日期", pd.to_datetime("2024-01-01"), help="在此日期之前的数据用于训练，之后的数据用于回测")
 
-st.sidebar.header("3. 模型超参数 (Model)")
-n_estimators = st.sidebar.slider("决策树数量 (n_estimators)", 10, 500, 200, help="树越多越抗噪，但计算越慢")
-max_depth = st.sidebar.slider("最大树深 (max_depth)", 3, 20, 5, help="深度越深越容易过拟合，建议保持在3-10之间")
-ma_window = st.sidebar.slider("均线窗口 (MA Window)", 5, 60, 20, help="计算趋势指标的窗口大小")
-vol_window = st.sidebar.slider("波动率窗口 (Vol Window)", 5, 30, 5, help="计算波动率的窗口大小")
+st.sidebar.header("3. 模型超参数（随机森林）")
+n_estimators = st.sidebar.slider("决策树数量", 50, 800, 300, help="树越多越抗噪，但计算越慢")
+max_depth = st.sidebar.slider("最大树深", 3, 12, 6, help="深度越深越容易过拟合，建议保持在3-8之间")
+ma_window = st.sidebar.slider("均线窗口", 5, 60, 20, help="计算趋势指标的窗口大小")
+vol_window = st.sidebar.slider("波动率窗口", 5, 30, 5, help="计算波动率的窗口大小")
 
-st.sidebar.header("4. 交易风控 (Risk)")
-stop_loss_pct = st.sidebar.slider("止损比例 (Stop Loss %)", 0.0, 20.0, 5.0, step=0.5) / 100.0
-take_profit_pct = st.sidebar.slider("止盈比例 (Take Profit %)", 0.0, 50.0, 15.0, step=1.0) / 100.0
-max_positions = st.sidebar.slider("最大持仓数 (Max Positions)", 1, 10, 3, help="同时持有的最大股票数量")
+st.sidebar.header("4. 交易风控")
+stop_loss_pct = st.sidebar.slider("止损比例", 0.0, 20.0, 5.0, step=0.5) / 100.0
+take_profit_pct = st.sidebar.slider("止盈比例", 0.0, 50.0, 15.0, step=1.0) / 100.0
+max_positions = st.sidebar.slider("最大持仓数", 1, 10, 3, help="同时持有的最大股票数量")
 rebalance_days = st.sidebar.slider("调仓周期 (天)", 1, 20, 5, help="每隔多少个交易日检查一次换股信号")
 
-with st.sidebar.expander("💸 交易成本设置 (Advanced)"):
+with st.sidebar.expander("💸 交易成本设置"):
         commission_rate = st.number_input("佣金费率 (如万分之2.5)", value=0.00025, step=0.00005, format="%.5f")
         min_commission = st.number_input("最低佣金 (元)", value=5.0, step=1.0)
         stamp_duty_rate = st.number_input("印花税率 (卖出收取)", value=0.0005, step=0.0001, format="%.4f", help="2023年8月28日起，A股印花税减半征收为0.05%")
-        slippage_rate = st.number_input("滑点率 (Slippage)", value=0.001, step=0.001, format="%.3f", help="模拟成交价与决策价的偏差，0.001代表0.1%")
+        slippage_rate = st.number_input("滑点率", value=0.0005, step=0.0005, format="%.4f", help="模拟成交价与决策价的偏差，0.0005代表0.05%")
+
+with st.sidebar.expander("🎯 选股信号阈值"):
+        buy_signal_threshold = st.slider("买入阈值", 0.1, 0.9, 0.45, step=0.05, help="上涨信号达到该阈值才会考虑买入")
+        max_down_risk = st.slider("下跌风险上限", 0.1, 0.9, 0.55, step=0.05, help="剧烈下跌概率超过该值将过滤")
+        score_mix_limit = st.slider("涨停信号权重", 0.0, 1.0, 0.55, step=0.05, help="上涨信号中涨停概率的权重")
+        fallback_signal_threshold = st.slider("兜底阈值", 0.05, 0.5, 0.15, step=0.05, help="若没有触发买入阈值，使用该阈值兜底选股")
+
+with st.sidebar.expander("🧪 训练标签设置"):
+        future_days = st.slider("预测天数", 1, 10, 1, step=1)
+        limit_up_threshold = st.slider("涨停阈值", 0.05, 0.2, 0.095, step=0.005)
+        sharp_up_threshold = st.slider("剧烈上涨阈值", 0.02, 0.12, 0.04, step=0.005)
+        sharp_down_threshold = st.slider("剧烈下跌阈值", -0.12, -0.02, -0.04, step=0.005)
 
 # 初始化Session State
 if 'data_map' not in st.session_state:
@@ -141,7 +153,7 @@ with tab1:
             
     # 展示数据概览
     if st.session_state['data_map']:
-        st.write("已加载数据概览 (最后5行):")
+        st.write("已加载数据概览（最后5行）:")
         first_code = list(st.session_state['data_map'].keys())[0]
         st.write(f"股票代码: {first_code}")
         st.dataframe(st.session_state['data_map'][first_code].tail())
@@ -169,7 +181,13 @@ with tab2:
                 
                 if not train_part.empty:
                     # 计算目标变量 (Shift操作)
-                    train_part_ready = st.session_state['feature_engineer'].prepare_training_data(train_part)
+                    train_part_ready = st.session_state['feature_engineer'].prepare_training_data(
+                        train_part,
+                        future_days=future_days,
+                        limit_up_threshold=limit_up_threshold,
+                        sharp_up_threshold=sharp_up_threshold,
+                        sharp_down_threshold=sharp_down_threshold
+                    )
                     if not train_part_ready.empty:
                         train_dfs.append(train_part_ready)
             
@@ -187,13 +205,13 @@ with tab2:
                         st.session_state['trained_model'] = model
                         
                     col_m1, col_m2, col_m3 = st.columns(3)
-                    col_m1.metric("准确率 (Accuracy)", f"{metrics['accuracy']:.2%}")
-                    col_m2.metric("精确率 (Precision)", f"{metrics['precision']:.2%}")
+                    col_m1.metric("准确率", f"{metrics['accuracy']:.2%}")
+                    col_m2.metric("精确率", f"{metrics['precision']:.2%}")
                     # 显示筛选后的特征数量
                     selected_count = metrics.get('selected_features_count', len(metrics['feature_importance']))
-                    col_m3.metric("特征数量 (Selected/Total)", f"{selected_count} / {len(model.feature_cols)}")
+                    col_m3.metric("特征数量", f"{selected_count} / {len(model.feature_cols)}")
                     
-                    st.write("### 因子重要性排行 (Top Features)")
+                    st.write("### 因子重要性排行")
                     st.caption("✨ 系统已自动从50+个候选因子中筛选出最有效的因子进行建模")
                     # 排序因子重要性
                     importance_df = pd.DataFrame(
@@ -202,7 +220,7 @@ with tab2:
                     ).sort_values(by='Importance', ascending=False)
                     
                     st.bar_chart(importance_df.set_index('Feature'))
-                    st.info("💡 这里的长条越长，说明该因子对预测涨跌越重要。")
+                    st.info("💡 这里的长条越长，说明该因子对预测涨停/剧烈涨跌越重要。")
 
 # === Tab 3: 策略回测 ===
 with tab3:
@@ -214,7 +232,7 @@ with tab3:
         st.info(f"**回测区间**: 仅在 {split_date} 之后的数据上进行回测，模拟真实交易环境。")
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("初始资金", f"¥{initial_capital:,}")
+        c1.metric("初始资金", f"¥{initial_capital:.2f}")
         c2.metric("止损线", f"-{stop_loss_pct*100}%")
         c3.metric("止盈线", f"+{take_profit_pct*100}%")
         c4.metric("最大持仓", f"{max_positions} 只")
@@ -244,17 +262,21 @@ with tab3:
                     commission_rate=commission_rate,
                     min_commission=min_commission,
                     stamp_duty_rate=stamp_duty_rate,
-                    slippage_rate=slippage_rate
+                    slippage_rate=slippage_rate,
+                    buy_signal_threshold=buy_signal_threshold,
+                    max_down_risk=max_down_risk,
+                    score_mix_limit=score_mix_limit,
+                    fallback_signal_threshold=fallback_signal_threshold
                 )
                 
                 with st.spinner("正在逐日模拟交易..."):
-                    res, transactions = bt.run_with_data(backtest_data_map, st.session_state['trained_model'])
+                    res, transactions, diagnostics = bt.run_with_data(backtest_data_map, st.session_state['trained_model'])
                 
                 if not res.empty:
                     # 1. 净值曲线
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(x=res.index, y=res['value'], mode='lines', name='策略净值', line=dict(color='#00ba38', width=2)))
-                    fig.update_layout(title="账户权益曲线", xaxis_title="日期", yaxis_title="资产净值 (元)", template="plotly_white")
+                    fig.update_layout(title="账户权益曲线", xaxis_title="日期", yaxis_title="资产净值（元）", template="plotly_white")
                     st.plotly_chart(fig, use_container_width=True)
                     
                     # 2. 核心指标
@@ -263,7 +285,7 @@ with tab3:
                     max_dd = calculate_max_drawdown(res['value'])
                     
                     m1, m2, m3 = st.columns(3)
-                    m1.metric("最终资产", f"¥{final_val:,.2f}")
+                    m1.metric("最终资产", f"¥{final_val:.2f}")
                     m2.metric("总收益率", f"{ret:.2%}", delta_color="normal")
                     m3.metric("最大回撤", f"{max_dd:.2%}")
                     
@@ -272,12 +294,30 @@ with tab3:
                     if not transactions.empty:
                         # 格式化显示
                         transactions['价格'] = transactions['价格'].apply(lambda x: f"¥{x:.2f}")
-                        transactions['金额'] = transactions['金额'].apply(lambda x: f"¥{x:,.2f}")
+                        transactions['金额'] = transactions['金额'].apply(lambda x: f"¥{x:.2f}")
                         transactions['手续费'] = transactions['手续费'].apply(lambda x: f"¥{x:.2f}")
                         transactions['印花税'] = transactions['印花税'].apply(lambda x: f"¥{x:.2f}")
                         st.dataframe(transactions, use_container_width=True)
                     else:
                         st.info("回测期间未触发任何交易。")
+                    
+                    st.markdown("### 🔎 选股诊断")
+                    if not diagnostics.empty:
+                        st.dataframe(diagnostics, use_container_width=True)
+                    else:
+                        st.info("暂无诊断数据。")
                         
                 else:
                     st.warning("回测期间无交易产生，可能是选股标准太严或数据不足。")
+
+if __name__ == "__main__":
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    except Exception:
+        get_script_run_ctx = None
+    ctx = get_script_run_ctx() if get_script_run_ctx else None
+    if ctx is None:
+        import sys
+        from streamlit.web import cli as stcli
+        sys.argv = ["streamlit", "run", __file__]
+        sys.exit(stcli.main())

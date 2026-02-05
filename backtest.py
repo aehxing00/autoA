@@ -9,7 +9,8 @@ class Backtester:
     def __init__(self, stock_codes, start_date, end_date, initial_capital=50000, 
                  stop_loss=0.05, take_profit=0.15, max_positions=3, rebalance_days=5,
                  commission_rate=0.00025, min_commission=5.0, stamp_duty_rate=0.0005,
-                 slippage_rate=0.001):
+                 slippage_rate=0.001, buy_signal_threshold=0.35, max_down_risk=0.45,
+                 score_mix_limit=0.6, fallback_signal_threshold=0.2):
         self.stock_codes = stock_codes
         self.start_date = start_date
         self.end_date = end_date
@@ -24,6 +25,10 @@ class Backtester:
         self.min_commission = min_commission
         self.stamp_duty_rate = stamp_duty_rate
         self.slippage_rate = slippage_rate # 滑点率，模拟成交价偏差
+        self.buy_signal_threshold = buy_signal_threshold
+        self.max_down_risk = max_down_risk
+        self.score_mix_limit = score_mix_limit
+        self.fallback_signal_threshold = fallback_signal_threshold
         
         self.loader = DataLoader()
         # 注意: FeatureEngineer 需要在外部初始化或在这里传入参数，
@@ -77,6 +82,7 @@ class Backtester:
         current_capital = self.capital
         history = []
         transactions = []
+        diagnostics = []
         
         print(f"开始回测 | 止损: {self.stop_loss:.1%} | 止盈: {self.take_profit:.1%} | 最大持仓: {self.max_positions} | 调仓周期: {self.rebalance_days}天")
         
@@ -131,24 +137,35 @@ class Backtester:
             if i % self.rebalance_days == 0: 
                 # 生成信号
                 candidates = []
+                fallback_candidates = []
                 for code, df in data_map.items():
                     if date in df.index:
                         row = df.loc[[date]]
                         # 使用选定特征进行预测，如果列不存在会自动补0 (在predict方法中处理)
                         if not row.empty:
-                            score = self.model.predict(row)[0]
-                            if score > 0.5 and code not in self.positions:
-                                candidates.append((code, score, row['close'].values[0]))
+                            probs = self.model.predict_proba(row).iloc[0]
+                            limit_prob = probs.get("limit_up", 0.0)
+                            sharp_up_prob = probs.get("sharp_up", 0.0)
+                            sharp_down_prob = probs.get("sharp_down", 0.0)
+                            score = (limit_prob * self.score_mix_limit) + (sharp_up_prob * (1 - self.score_mix_limit))
+                            if sharp_down_prob <= self.max_down_risk and code not in self.positions:
+                                if score >= self.buy_signal_threshold:
+                                    candidates.append((code, score, row['close'].values[0]))
+                                elif score >= self.fallback_signal_threshold:
+                                    fallback_candidates.append((code, score, row['close'].values[0]))
                 
                 # 选股
                 candidates.sort(key=lambda x: x[1], reverse=True)
+                fallback_candidates.sort(key=lambda x: x[1], reverse=True)
                 
                 # 能够持有的最大空位数
                 available_slots = self.max_positions - len(self.positions)
                 
                 # 如果有空位且有资金
-                if candidates and available_slots > 0 and current_capital > 0:
-                    top_picks = candidates[:available_slots]
+                pick_list = candidates if candidates else fallback_candidates
+                used_fallback = len(candidates) == 0
+                if pick_list and available_slots > 0 and current_capital > 0:
+                    top_picks = pick_list[:available_slots]
                     # 简单资金分配：剩余资金均分给空位
                     # 注意：如果已有持仓，current_capital是剩余现金
                     alloc_per_stock = current_capital / available_slots
@@ -177,8 +194,22 @@ class Backtester:
                                     '金额': shares * exec_price, # 成交额，不含费
                                     '手续费': comm,
                                     '印花税': 0.0,
-                                    '原因': f'模型评分:{score:.2f}'
+                                    '原因': f'上涨信号:{score:.2f}'
                                 })
+                all_candidate_count = len(candidates) + len(fallback_candidates)
+                avg_score = 0.0
+                if all_candidate_count > 0:
+                    avg_score = (sum([x[1] for x in candidates]) + sum([x[1] for x in fallback_candidates])) / all_candidate_count
+                diagnostics.append({
+                    '日期': date,
+                    '候选数量': all_candidate_count,
+                    '主阈值命中': len(candidates),
+                    '兜底命中': len(fallback_candidates),
+                    '是否兜底': int(used_fallback),
+                    '平均评分': avg_score,
+                    '空位数量': available_slots,
+                    '买入数量': min(available_slots, len(pick_list)) if pick_list else 0
+                })
             
             # 3. 记录当日净值 (收盘后)
             todays_equity = current_capital
@@ -191,7 +222,7 @@ class Backtester:
             
             history.append({'date': date, 'value': todays_equity})
 
-        return pd.DataFrame(history).set_index('date'), pd.DataFrame(transactions)
+        return pd.DataFrame(history).set_index('date'), pd.DataFrame(transactions), pd.DataFrame(diagnostics)
 
     def run(self):
         # 兼容旧接口，虽然现在主要用 run_with_data

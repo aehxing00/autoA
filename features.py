@@ -166,15 +166,17 @@ class FeatureEngineer:
         
         return df
 
-    def prepare_training_data(self, df, future_days=5):
+    def prepare_training_data(self, df, future_days=1, limit_up_threshold=0.095, sharp_up_threshold=0.05, sharp_down_threshold=-0.05):
         """
-        创建训练数据的目标变量 (未来收益率)。
-        目标: 如果未来收益率 > 0 则为 1，否则为 0 (分类问题)
+        创建训练数据的目标变量 (多分类)。
+        目标: 涨停/剧烈上涨/剧烈下跌/正常
         """
-        # 目标: 未来N天的收益率
-        df['target_return'] = df['close'].shift(-future_days) / df['close'] - 1
+        df['future_return'] = df['close'].shift(-future_days) / df['close'] - 1
+        df['target_class'] = 0
+        df.loc[df['future_return'] >= limit_up_threshold, 'target_class'] = 2
+        df.loc[(df['future_return'] >= sharp_up_threshold) & (df['future_return'] < limit_up_threshold), 'target_class'] = 1
+        df.loc[df['future_return'] <= sharp_down_threshold, 'target_class'] = -1
         
-        # 清除最后N行没有目标数据的行
         data = df.dropna().copy()
         
         return data
